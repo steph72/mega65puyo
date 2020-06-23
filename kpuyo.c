@@ -3,6 +3,7 @@
 #include <keyboard.h>
 #include <stdio.h>
 #include <conio.h>
+#include <time.h>
 
 // fix for vscode syntax checking: define unknown types
 #ifdef __UTYPES__
@@ -29,10 +30,18 @@ typedef unsigned int word;
 
 #define puyoAtPosition(player, x, y) &canvas[(player * WELLSIZE) + (x) + ((y)*NUM_COLUMNS)]
 
+#define KP_STATE_BEGIN_FALL 0
+#define KP_STATE_FALL_DOWN 1
+#define KP_STATE_FIND_AND_DELETE_COMBOS 2
+#define KP_STATE_FALL_AFTER_DELETE 3
+
 byte graphChars[] = {' ', 'a' + 128, 'b' + 128, 'c' + 128};
 byte colours[] = {BLACK, GREEN, BLUE, PURPLE};
 byte *deleteList[2 * DELETELIST_SIZE];
 byte canvas[2 * WELLSIZE];
+
+byte playerStartTick[2];
+byte currentPlayerState[2];
 
 void dbgWaitkey(void)
 {
@@ -170,7 +179,7 @@ void deleteMarkedPuyos(byte player, byte num)
   byte i;
   for (i = 0; i < num; i++)
   {
-    *deleteList[(player*DELETELIST_SIZE)+i] = 0;
+    *deleteList[(player * DELETELIST_SIZE) + i] = 0;
   }
   // gotoxy(0, 1);
   // printf("%u deleted   ", num);
@@ -269,19 +278,93 @@ void drawCanvas(byte player)
   }
 }
 
+void doPlayerTick(byte player)
+{
+
+  byte i, a;
+  byte currentTick;
+
+  currentTick = 200; // get TOD
+
+  if (currentTick - playerStartTick[player] < 2)
+  {
+    return;
+  }
+
+  playerStartTick[player] = 0; //;currentTick;
+
+  switch (currentPlayerState[player])
+  {
+
+  case KP_STATE_BEGIN_FALL:
+  {
+    for (i = 0; i < NUM_COLUMNS; i++)
+    {
+      a = sid_rnd() & 3;
+      canvas[i] = a;
+    }
+    currentPlayerState[player] = KP_STATE_FALL_DOWN;
+    break;
+  }
+
+  case KP_STATE_FALL_DOWN:
+  {
+    if (!fallDownStep(player))
+    {
+      currentPlayerState[player] = KP_STATE_FIND_AND_DELETE_COMBOS;
+    }
+    break;
+  }
+
+  case KP_STATE_FIND_AND_DELETE_COMBOS:
+  {
+    if (markForDeletion(player))
+    {
+      currentPlayerState[player] = KP_STATE_FALL_AFTER_DELETE;
+    }
+    else
+    {
+      currentPlayerState[player] = KP_STATE_BEGIN_FALL;
+    }
+    break;
+  }
+
+  case KP_STATE_FALL_AFTER_DELETE:
+  {
+    if (!fallDownStep(player))
+    {
+      currentPlayerState[player] = KP_STATE_FIND_AND_DELETE_COMBOS;
+    }
+    break;
+  }
+  }
+
+  drawCanvas(player);
+}
+
 void test()
 {
   word i, i2;
   byte a;
   byte count;
+  clock_t currentClock;
+  clock_t elapsed;
+
+  currentPlayerState[0] = KP_STATE_BEGIN_FALL;
 
   while (true)
   {
     // empty canvas
-    for (i = 0; i < (WELLSIZE*2); canvas[i++] = 0)
+    for (i = 0; i < (WELLSIZE * 2); canvas[i++] = 0)
     {
     }
 
+    while (true)
+    {
+      doPlayerTick(0);
+    }
+
+    /*
     for (i2 = 0; i2 < NUM_ROWS; i2++)
     {
       // fill upper row with random puyos
@@ -292,7 +375,13 @@ void test()
       }
       while (fallDownStep(0))
       {
+        currentClock = clock();
         drawCanvas(0);
+        do
+        {
+          elapsed = clock() - currentClock;
+          // printf("%u %u %u\n",clock(),currentClock,elapsed);
+        } while (elapsed < 150000);
       }
       while (markForDeletion(0))
       {
@@ -302,11 +391,13 @@ void test()
         } while (fallDownStep(0));
       }
     }
+    */
   }
 }
 
 void main()
 {
+  clock_start();
   clrscr();
   bordercolor(0);
   bgcolor(0);
