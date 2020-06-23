@@ -14,6 +14,7 @@ typedef unsigned int word;
 #endif
 
 #define SCREEN_WIDTH 40
+#define DELETELIST_SIZE 64
 
 #define NUM_ROWS 20
 #define NUM_COLUMNS 10 // caution! well size can't be >255
@@ -26,12 +27,12 @@ typedef unsigned int word;
 #define KP_BIT_CHECKED 128
 #define KP_BIT_DELETE 64
 
-#define puyoAtPosition(x, y) &canvas[(x) + ((y)*NUM_COLUMNS)]
+#define puyoAtPosition(player, x, y) &canvas[(player * WELLSIZE) + (x) + ((y)*NUM_COLUMNS)]
 
 byte graphChars[] = {' ', 'a' + 128, 'b' + 128, 'c' + 128};
 byte colours[] = {BLACK, GREEN, BLUE, PURPLE};
-byte *deleteList[64];
-byte canvas[WELLSIZE];
+byte *deleteList[2 * DELETELIST_SIZE];
+byte canvas[2 * WELLSIZE];
 
 void dbgWaitkey(void)
 {
@@ -73,13 +74,13 @@ void resetColors()
 
 // return the puyo id at a given position, or 0 if position is invalid
 // (for fast neighbor checking)
-byte puyoIDAtPosition(byte x, byte y)
+byte puyoIDAtPosition(byte player, byte x, byte y)
 {
   if (x > NUM_COLUMNS - 1 || y > NUM_ROWS - 1)
   {
     return 0;
   }
-  return *puyoAtPosition(x, y) & 7;
+  return *puyoAtPosition(player, x, y) & 7;
 }
 
 /*
@@ -87,7 +88,7 @@ byte puyoIDAtPosition(byte x, byte y)
   of puyos in a slightly more convoluted way than I had hoped...
 */
 
-byte checkNeighbors(byte px, byte py)
+byte checkNeighbors(byte player, byte px, byte py)
 {
   bool found;
   register byte x, y;
@@ -96,7 +97,7 @@ byte checkNeighbors(byte px, byte py)
   byte numHits = 1;
 
   *DEFAULT_SCREEN = '0' + numHits;
-  thisPuyoID = *puyoAtPosition(px, py);
+  thisPuyoID = *puyoAtPosition(player, px, py);
 
   // no puyo or already marked? don't check
   if (!thisPuyoID || thisPuyoID & 128)
@@ -104,11 +105,11 @@ byte checkNeighbors(byte px, byte py)
     return 0;
   }
 
-  deleteList[numHits - 1] = puyoAtPosition(px, py);
+  deleteList[(player * DELETELIST_SIZE) + numHits - 1] = puyoAtPosition(player, px, py);
   markedPuyoID = thisPuyoID | 128;
 
   // mark this puyo
-  *puyoAtPosition(px, py) = markedPuyoID; // mark this puyo
+  *puyoAtPosition(player, px, py) = markedPuyoID; // mark this puyo
 
   found = true;
 
@@ -120,42 +121,42 @@ byte checkNeighbors(byte px, byte py)
       for (y = 0; y < NUM_ROWS; y++)
       {
         // same colour?
-        if (*puyoAtPosition(x, y) == thisPuyoID)
+        if (*puyoAtPosition(player, x, y) == thisPuyoID)
         {
           if (
-              ((x < NUM_COLUMNS - 1) && (*puyoAtPosition(x + 1, y) == markedPuyoID)))
+              ((x < NUM_COLUMNS - 1) && (*puyoAtPosition(player, x + 1, y) == markedPuyoID)))
           {
-            *puyoAtPosition(x, y) |= 128;
+            *puyoAtPosition(player, x, y) |= 128;
             numHits++;
             found = true;
-            deleteList[numHits - 1] = puyoAtPosition(x, y);
+            deleteList[numHits - 1] = puyoAtPosition(player, x, y);
           }
 
           if (
-              ((x > 0) && (*puyoAtPosition(x - 1, y) == markedPuyoID)))
+              ((x > 0) && (*puyoAtPosition(player, x - 1, y) == markedPuyoID)))
           {
-            *puyoAtPosition(x, y) |= 128;
+            *puyoAtPosition(player, x, y) |= 128;
             numHits++;
             found = true;
-            deleteList[numHits - 1] = puyoAtPosition(x, y);
+            deleteList[numHits - 1] = puyoAtPosition(player, x, y);
           }
 
           if (
-              ((y > 0) && (*puyoAtPosition(x, y - 1) == markedPuyoID)))
+              ((y > 0) && (*puyoAtPosition(player, x, y - 1) == markedPuyoID)))
           {
-            *puyoAtPosition(x, y) |= 128;
+            *puyoAtPosition(player, x, y) |= 128;
             numHits++;
             found = true;
-            deleteList[numHits - 1] = puyoAtPosition(x, y);
+            deleteList[numHits - 1] = puyoAtPosition(player, x, y);
           }
 
           if (
-              ((y < NUM_ROWS - 1) && (*puyoAtPosition(x, y + 1) == markedPuyoID)))
+              ((y < NUM_ROWS - 1) && (*puyoAtPosition(player, x, y + 1) == markedPuyoID)))
           {
-            *puyoAtPosition(x, y) |= 128;
+            *puyoAtPosition(player, x, y) |= 128;
             numHits++;
             found = true;
-            deleteList[numHits - 1] = puyoAtPosition(x, y);
+            deleteList[numHits - 1] = puyoAtPosition(player, x, y);
           }
         }
       }
@@ -164,12 +165,12 @@ byte checkNeighbors(byte px, byte py)
   return numHits;
 }
 
-void deleteMarkedPuyos(byte num)
+void deleteMarkedPuyos(byte player, byte num)
 {
   byte i;
   for (i = 0; i < num; i++)
   {
-    *deleteList[i] = 0;
+    *deleteList[(player*DELETELIST_SIZE)+i] = 0;
   }
   // gotoxy(0, 1);
   // printf("%u deleted   ", num);
@@ -177,19 +178,19 @@ void deleteMarkedPuyos(byte num)
   // dbgWaitkey();
 }
 
-void clearMarked(void)
+void clearMarked(byte player)
 {
   byte x, y;
   for (y = 0; y < NUM_ROWS; y++)
   {
     for (x = 0; x < NUM_COLUMNS; x++)
     {
-      *puyoAtPosition(x, y) &= 127;
+      *puyoAtPosition(player, x, y) &= 127;
     }
   }
 }
 
-bool markForDeletion(void)
+bool markForDeletion(byte player)
 {
   byte x, y;
   byte *currentPuyo;
@@ -197,17 +198,17 @@ bool markForDeletion(void)
   byte count;
   bool hasDeleted;
 
-  clearMarked();
+  clearMarked(player);
   hasDeleted = false;
 
   for (y = 0; y < NUM_ROWS; y++)
   {
     for (x = 0; x < NUM_COLUMNS; x++)
     {
-      count = checkNeighbors(x, y);
+      count = checkNeighbors(player, x, y);
       if (count > 3)
       {
-        deleteMarkedPuyos(count);
+        deleteMarkedPuyos(player, count);
         hasDeleted = true;
       }
     }
@@ -215,7 +216,7 @@ bool markForDeletion(void)
   return hasDeleted;
 }
 
-bool fallDownStep(void)
+bool fallDownStep(byte player)
 {
   bool moved = false;
   byte *elem, *prevElem;
@@ -225,8 +226,8 @@ bool fallDownStep(void)
   {
     for (x = 0; x < NUM_COLUMNS; x++)
     {
-      elem = puyoAtPosition(x, y);
-      prevElem = puyoAtPosition(x, y - 1);
+      elem = puyoAtPosition(player, x, y);
+      prevElem = puyoAtPosition(player, x, y - 1);
 
       if (*elem == 0 && *prevElem != 0)
       {
@@ -239,7 +240,7 @@ bool fallDownStep(void)
   return moved;
 }
 
-void drawCanvas(void)
+void drawCanvas(byte player)
 {
   byte x, y;
   byte *baseadr;
@@ -253,7 +254,7 @@ void drawCanvas(void)
 
   for (y = 0; y < NUM_ROWS; y++)
   {
-    baseadr = canvas + (y * NUM_COLUMNS);
+    baseadr = canvas + (player * WELLSIZE) + (y * NUM_COLUMNS);
     // blit current canvas line onto screen
     for (x = 0; x < NUM_COLUMNS; x++)
     {
@@ -277,7 +278,7 @@ void test()
   while (true)
   {
     // empty canvas
-    for (i = 0; i < (NUM_ROWS * NUM_COLUMNS); canvas[i++] = 0)
+    for (i = 0; i < (WELLSIZE*2); canvas[i++] = 0)
     {
     }
 
@@ -289,16 +290,16 @@ void test()
         a = sid_rnd() & 3;
         canvas[i] = a;
       }
-      while (fallDownStep())
+      while (fallDownStep(0))
       {
-        drawCanvas();
+        drawCanvas(0);
       }
-      while (markForDeletion())
+      while (markForDeletion(0))
       {
         do
         {
-          drawCanvas();
-        } while (fallDownStep());
+          drawCanvas(0);
+        } while (fallDownStep(0));
       }
     }
   }
