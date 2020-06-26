@@ -3,7 +3,6 @@
 #include <keyboard.h>
 #include <stdio.h>
 #include <conio.h>
-#include <time.h>
 
 // fix for vscode syntax checking: define unknown types
 #ifdef __UTYPES__
@@ -16,11 +15,12 @@ typedef unsigned int word;
 
 #define SCREEN_WIDTH 40
 #define DELETELIST_SIZE 64
+#define SCREEN_MID 20
+#define WELL_H_PADDING 3
 
-#define NUM_ROWS 20
-#define NUM_COLUMNS 10 // caution! well size can't be >255
+#define NUM_ROWS 12
+#define NUM_COLUMNS 6 // caution! well size can't be >255
 
-#define WELL_XPOS SCREEN_WIDTH / 2 - NUM_COLUMNS / 2
 #define WELL_YPOS 2
 
 #define WELLSIZE NUM_ROWS *NUM_COLUMNS
@@ -28,20 +28,41 @@ typedef unsigned int word;
 #define KP_BIT_CHECKED 128
 #define KP_BIT_DELETE 64
 
-#define puyoAtPosition(player, x, y) &canvas[(player * WELLSIZE) + (x) + ((y)*NUM_COLUMNS)]
-
 #define KP_STATE_BEGIN_FALL 0
 #define KP_STATE_FALL_DOWN 1
 #define KP_STATE_FIND_AND_DELETE_COMBOS 2
 #define KP_STATE_FALL_AFTER_DELETE 3
 
-byte graphChars[] = {' ', 'a' + 128, 'b' + 128, 'c' + 128};
-byte colours[] = {BLACK, GREEN, BLUE, PURPLE};
+volatile byte ticks;
+
+const byte tiles[] = "    abcdefghijklmnop";
+const byte colours[] = {BLACK, GREEN, BLUE, PURPLE};
+
 byte *deleteList[2 * DELETELIST_SIZE];
 byte canvas[2 * WELLSIZE];
 
 byte playerStartTick[2];
 byte currentPlayerState[2];
+byte baseTickDelay = 15;
+
+byte canvasLutY[NUM_ROWS]; // lookup table for rows
+word screenLutY[25];       // screen row LUT
+
+/*
+byte *puyoAtPosition(byte player, byte x, byte y)
+{
+  return player == 1 ? &canvas[WELLSIZE + x + canvasLutY[y]] : &canvas[x + canvasLutY[y]];
+}
+*/
+
+inline byte *puyoAtPosition(byte player, byte x, byte y)
+{
+  if (player)
+  {
+    return &canvas[WELLSIZE + x + canvasLutY[y]];
+  }
+  return &canvas[x + canvasLutY[y]];
+}
 
 void dbgWaitkey(void)
 {
@@ -64,31 +85,9 @@ void dbgWaitkey(void)
   }
 }
 
-void dbgSetColor(byte x, byte y, byte c)
+// return the puyo id at a given position
+inline byte puyoIDAtPosition(byte player, byte x, byte y)
 {
-  COLORRAM[(word)(WELL_XPOS + x + ((word)(WELL_YPOS + y) * 40))] = c;
-}
-
-void resetColors()
-{
-  byte x, y;
-  for (x = 0; x < NUM_COLUMNS; x++)
-  {
-    for (y = 0; y < NUM_ROWS; y++)
-    {
-      dbgSetColor(x, y, LIGHT_BLUE);
-    }
-  }
-}
-
-// return the puyo id at a given position, or 0 if position is invalid
-// (for fast neighbor checking)
-byte puyoIDAtPosition(byte player, byte x, byte y)
-{
-  if (x > NUM_COLUMNS - 1 || y > NUM_ROWS - 1)
-  {
-    return 0;
-  }
   return *puyoAtPosition(player, x, y) & 7;
 }
 
@@ -97,15 +96,19 @@ byte puyoIDAtPosition(byte player, byte x, byte y)
   of puyos in a slightly more convoluted way than I had hoped...
 */
 
-byte checkNeighbors(byte player, byte px, byte py)
+const byte deleteListOffsetTbl[] = {255, DELETELIST_SIZE - 1};
+
+inline byte checkNeighbors(byte player, byte px, byte py)
 {
-  bool found;
+  byte found;
   register byte x, y;
   byte thisPuyoID;
   byte markedPuyoID;
   byte numHits = 1;
+  byte deleteListOffset;
 
-  *DEFAULT_SCREEN = '0' + numHits;
+  byte *currentPuyo;
+
   thisPuyoID = *puyoAtPosition(player, px, py);
 
   // no puyo or already marked? don't check
@@ -114,63 +117,70 @@ byte checkNeighbors(byte player, byte px, byte py)
     return 0;
   }
 
-  deleteList[(player * DELETELIST_SIZE) + numHits - 1] = puyoAtPosition(player, px, py);
+  deleteListOffset = deleteListOffsetTbl[player];
+
+  deleteList[deleteListOffset + numHits] = puyoAtPosition(player, px, py);
   markedPuyoID = thisPuyoID | 128;
 
   // mark this puyo
-  *puyoAtPosition(player, px, py) = markedPuyoID; // mark this puyo
+  *puyoAtPosition(player, px, py) = markedPuyoID;
 
-  found = true;
+  found = 1;
 
-  while (found)
+  do
   {
-    found = false;
+    found = 0;
     for (x = 0; x < NUM_COLUMNS; x++)
     {
       for (y = 0; y < NUM_ROWS; y++)
       {
+
+        currentPuyo = puyoAtPosition(player, x, y);
+
         // same colour?
-        if (*puyoAtPosition(player, x, y) == thisPuyoID)
+        if (*currentPuyo == thisPuyoID)
         {
+          // check if there's a puyo of the same colour already
+          // marked in the neighborhood. if yes, also mark the current puyo
           if (
               ((x < NUM_COLUMNS - 1) && (*puyoAtPosition(player, x + 1, y) == markedPuyoID)))
           {
-            *puyoAtPosition(player, x, y) |= 128;
+            *currentPuyo |= 128;
             numHits++;
-            found = true;
-            deleteList[numHits - 1] = puyoAtPosition(player, x, y);
+            found = 1;
+            deleteList[deleteListOffset + numHits] = currentPuyo;
           }
 
           if (
               ((x > 0) && (*puyoAtPosition(player, x - 1, y) == markedPuyoID)))
           {
-            *puyoAtPosition(player, x, y) |= 128;
+            *currentPuyo |= 128;
             numHits++;
-            found = true;
-            deleteList[numHits - 1] = puyoAtPosition(player, x, y);
+            found = 1;
+            deleteList[deleteListOffset + numHits] = currentPuyo;
           }
 
           if (
               ((y > 0) && (*puyoAtPosition(player, x, y - 1) == markedPuyoID)))
           {
-            *puyoAtPosition(player, x, y) |= 128;
+            *currentPuyo |= 128;
             numHits++;
-            found = true;
-            deleteList[numHits - 1] = puyoAtPosition(player, x, y);
+            found = 1;
+            deleteList[deleteListOffset + numHits] = currentPuyo;
           }
 
           if (
               ((y < NUM_ROWS - 1) && (*puyoAtPosition(player, x, y + 1) == markedPuyoID)))
           {
-            *puyoAtPosition(player, x, y) |= 128;
+            *currentPuyo |= 128;
             numHits++;
-            found = true;
-            deleteList[numHits - 1] = puyoAtPosition(player, x, y);
+            found = 1;
+            deleteList[deleteListOffset + numHits] = currentPuyo;
           }
         }
       }
     }
-  }
+  } while (found);
   return numHits;
 }
 
@@ -181,10 +191,6 @@ void deleteMarkedPuyos(byte player, byte num)
   {
     *deleteList[(player * DELETELIST_SIZE) + i] = 0;
   }
-  // gotoxy(0, 1);
-  // printf("%u deleted   ", num);
-  // drawCanvas();
-  // dbgWaitkey();
 }
 
 void clearMarked(byte player)
@@ -249,49 +255,61 @@ bool fallDownStep(byte player)
   return moved;
 }
 
-void drawCanvas(byte player)
+void refreshScreen(byte player)
 {
-  byte x, y;
-  byte *baseadr;
   byte *screenadr;
-  byte *colourAdr;
-  byte pID;
+  byte *coladr;
+  byte *tileadr;
+  byte currentPuyo;
+  word offset;
+  byte x, y;
 
-  // start address of well screen area
-  screenadr = DEFAULT_SCREEN + WELL_XPOS + (40 * WELL_YPOS);
-  colourAdr = COLORRAM + WELL_XPOS + (40 * WELL_YPOS);
-
-  for (y = 0; y < NUM_ROWS; y++)
+  // refreshing from bottom up to avoid flickering
+  for (y = NUM_ROWS - 1; y != 0; y--)
   {
-    baseadr = canvas + (player * WELLSIZE) + (y * NUM_COLUMNS);
-    // blit current canvas line onto screen
     for (x = 0; x < NUM_COLUMNS; x++)
     {
-      pID = (*baseadr++) & 7;
-      // *screenadr++ = *baseadr++; // debugging only
-      *screenadr++ = graphChars[pID];
-      *colourAdr++ = colours[pID];
+      offset = 6 + ((player == 0) ? (x * 2 + (screenLutY[y])) : x * 2 + screenLutY[y] + (NUM_COLUMNS * 2) + 4);
+      screenadr = (DEFAULT_SCREEN + offset);
+      coladr = (COLORRAM + offset);
+      currentPuyo = puyoIDAtPosition(player, x, y);
+      tileadr = &tiles[currentPuyo * 4];
+      // tile
+      *(screenadr++) = *(tileadr++) | 128;
+      *(screenadr++) = *(tileadr++) | 128;
+      screenadr += 38;
+      *(screenadr++) = *(tileadr++) | 128;
+      *screenadr = *(tileadr) | 128;
+      // colour
+      *(coladr++) = colours[currentPuyo];
+      *(coladr++) = colours[currentPuyo];
+      coladr += 38;
+      *(coladr++) = colours[currentPuyo];
+      *(coladr) = colours[currentPuyo];
     }
-    // increase screen line
-    screenadr += (40 - NUM_COLUMNS);
-    colourAdr += (40 - NUM_COLUMNS);
   }
 }
+
+// main game logic implemented as state machine
+// (see kp_state defines for possible states)
 
 void doPlayerTick(byte player)
 {
 
   byte i, a;
-  byte currentTick;
+  word offset = 0;
 
-  currentTick = 200; // get TOD
-
-  if (currentTick - playerStartTick[player] < 2)
+  if (ticks - playerStartTick[player] < baseTickDelay)
   {
     return;
   }
 
-  playerStartTick[player] = 0; //;currentTick;
+  if (player == 1)
+  {
+    offset = WELLSIZE;
+  }
+
+  playerStartTick[player] = ticks; //;currentTick;
 
   switch (currentPlayerState[player])
   {
@@ -300,8 +318,8 @@ void doPlayerTick(byte player)
   {
     for (i = 0; i < NUM_COLUMNS; i++)
     {
-      a = sid_rnd() & 3;
-      canvas[i] = a;
+      a = rand() & 3;
+      canvas[offset + i] = a;
     }
     currentPlayerState[player] = KP_STATE_FALL_DOWN;
     break;
@@ -339,7 +357,7 @@ void doPlayerTick(byte player)
   }
   }
 
-  drawCanvas(player);
+  refreshScreen(player);
 }
 
 void test()
@@ -347,10 +365,9 @@ void test()
   word i, i2;
   byte a;
   byte count;
-  clock_t currentClock;
-  clock_t elapsed;
 
   currentPlayerState[0] = KP_STATE_BEGIN_FALL;
+  currentPlayerState[1] = KP_STATE_BEGIN_FALL;
 
   while (true)
   {
@@ -362,46 +379,50 @@ void test()
     while (true)
     {
       doPlayerTick(0);
+      doPlayerTick(1);
     }
-
-    /*
-    for (i2 = 0; i2 < NUM_ROWS; i2++)
-    {
-      // fill upper row with random puyos
-      for (i = 0; i < NUM_COLUMNS; i++)
-      {
-        a = sid_rnd() & 3;
-        canvas[i] = a;
-      }
-      while (fallDownStep(0))
-      {
-        currentClock = clock();
-        drawCanvas(0);
-        do
-        {
-          elapsed = clock() - currentClock;
-          // printf("%u %u %u\n",clock(),currentClock,elapsed);
-        } while (elapsed < 150000);
-      }
-      while (markForDeletion(0))
-      {
-        do
-        {
-          drawCanvas(0);
-        } while (fallDownStep(0));
-      }
-    }
-    */
   }
+}
+
+interrupt(kernel_keyboard) void irqService(void)
+{
+  ticks++;
+}
+
+void setupLUT()
+{
+  byte a;
+  for (a = 0; a < NUM_ROWS; a++)
+  {
+    canvasLutY[a] = a * NUM_COLUMNS;
+  }
+  for (a = 0; a < 24; a++)
+  {
+    screenLutY[a] = (word)a * 80;
+  }
+}
+
+void setVIC3Mode()
+{
+  const byte *key = 0xd02f;
+  const byte *vicmode = 0xd031;
+  *key = 165;
+  *key = 150;
+  *vicmode |= 64;
 }
 
 void main()
 {
-  clock_start();
+
+  asm { sei}
+  *KERNEL_IRQ = &irqService;
+  asm { cli}
+
   clrscr();
-  bordercolor(0);
+  setupLUT();
   bgcolor(0);
-  sid_rnd_init();
-  keyboard_init();
+  bordercolor(0);
+  setVIC3Mode();
+  // keyboard_init();
   test();
 }
