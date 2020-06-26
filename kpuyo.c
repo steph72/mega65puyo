@@ -30,8 +30,9 @@ typedef unsigned int word;
 
 #define KP_STATE_BEGIN_FALL 0
 #define KP_STATE_FALL_DOWN 1
-#define KP_STATE_FIND_AND_DELETE_COMBOS 2
-#define KP_STATE_FALL_AFTER_DELETE 3
+#define KP_STATE_FIND_AND_DELETE_COMBOS1 2
+#define KP_STATE_FIND_AND_DELETE_COMBOS2 3
+#define KP_STATE_FALL_AFTER_DELETE 4
 
 volatile byte ticks;
 
@@ -47,6 +48,9 @@ byte baseTickDelay = 15;
 
 byte canvasLutY[NUM_ROWS]; // lookup table for rows
 word screenLutY[25];       // screen row LUT
+
+byte hasDeleted[2];        // delete flags for state machine
+
 
 /*
 byte *puyoAtPosition(byte player, byte x, byte y)
@@ -205,18 +209,38 @@ void clearMarked(byte player)
   }
 }
 
-bool markForDeletion(byte player)
+/* 
+find puyos to delete
+at least for c64 class machines, we have to do this
+in two parts, because otherwise the analysis phase
+would lock up the machine too long 
+*/
+
+byte markForDeletion(byte player, byte part)
 {
   byte x, y;
   byte *currentPuyo;
   byte currentPuyoID;
   byte count;
-  bool hasDeleted;
+  byte hasDeleted;
+
+  byte startY, endY;
 
   clearMarked(player);
-  hasDeleted = false;
+  hasDeleted = 0;
 
-  for (y = 0; y < NUM_ROWS; y++)
+  if (part == 0)
+  {
+    startY = 0;
+    endY = NUM_ROWS / 2;
+  }
+  else
+  {
+    startY = NUM_ROWS / 2;
+    endY = NUM_ROWS;
+  }
+
+  for (y = startY; y < endY; y++)
   {
     for (x = 0; x < NUM_COLUMNS; x++)
     {
@@ -224,7 +248,7 @@ bool markForDeletion(byte player)
       if (count > 3)
       {
         deleteMarkedPuyos(player, count);
-        hasDeleted = true;
+        hasDeleted = 1;
       }
     }
   }
@@ -310,6 +334,7 @@ void doPlayerTick(byte player)
   }
 
   playerStartTick[player] = ticks; //;currentTick;
+  cputc('0'+currentPlayerState[player]);
 
   switch (currentPlayerState[player])
   {
@@ -329,14 +354,22 @@ void doPlayerTick(byte player)
   {
     if (!fallDownStep(player))
     {
-      currentPlayerState[player] = KP_STATE_FIND_AND_DELETE_COMBOS;
+      currentPlayerState[player] = KP_STATE_FIND_AND_DELETE_COMBOS1;
     }
     break;
   }
 
-  case KP_STATE_FIND_AND_DELETE_COMBOS:
+  case KP_STATE_FIND_AND_DELETE_COMBOS1:
   {
-    if (markForDeletion(player))
+    hasDeleted[player] = markForDeletion(player,0);
+    currentPlayerState[player] = KP_STATE_FIND_AND_DELETE_COMBOS2;
+    break;
+  }
+
+  case KP_STATE_FIND_AND_DELETE_COMBOS2:
+  {
+    hasDeleted[player] |= markForDeletion(player,1);
+    if (hasDeleted[player])
     {
       currentPlayerState[player] = KP_STATE_FALL_AFTER_DELETE;
     }
@@ -351,7 +384,7 @@ void doPlayerTick(byte player)
   {
     if (!fallDownStep(player))
     {
-      currentPlayerState[player] = KP_STATE_FIND_AND_DELETE_COMBOS;
+      currentPlayerState[player] = KP_STATE_FIND_AND_DELETE_COMBOS1;
     }
     break;
   }
