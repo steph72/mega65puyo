@@ -3,6 +3,9 @@
 #include <keyboard.h>
 #include <stdio.h>
 #include <conio.h>
+#include "charset.h"
+
+#define DEBUG
 
 // fix for vscode syntax checking: define unknown types
 #ifdef __UTYPES__
@@ -36,31 +39,40 @@ typedef unsigned int word;
 
 volatile byte ticks;
 
-const byte tiles[] = "    abcdefghijklmnop";
-const byte colours[] = {BLACK, GREEN, BLUE, PURPLE};
+const byte tiles[] = {32, 32, 32, 32, 64, 65, 66, 67, 64, 65, 66, 67, 64, 65, 66, 67, 64, 65, 66, 67 };
+const byte colours[] = {BLACK,0xa,0xb,0xc,0xd};
 
 byte *deleteList[2 * DELETELIST_SIZE];
 byte canvas[2 * WELLSIZE];
 
 byte playerStartTick[2];
 byte currentPlayerState[2];
-byte baseTickDelay = 15;
+byte hasDeleted[2]; // delete flags for state machine
+byte baseTickDelay = 8;
 
 byte canvasLutY[NUM_ROWS]; // lookup table for rows
 word screenLutY[25];       // screen row LUT
 
-byte hasDeleted[2];        // delete flags for state machine
-
+#ifdef DEBUG
+byte maxTicks;
+#endif
 
 /*
-byte *puyoAtPosition(byte player, byte x, byte y)
-{
-  return player == 1 ? &canvas[WELLSIZE + x + canvasLutY[y]] : &canvas[x + canvasLutY[y]];
-}
+
+max ticks per scheduler step:
+
+                            c64@1mhz        c65@3.5mhz
+-----------------------------------------------------------------------------------                            
+  inlined accessor          32              10
+  non-inlined accessor      39              11
+  non-inlined ?: accessor   39              11
+
+
 */
 
 inline byte *puyoAtPosition(byte player, byte x, byte y)
 {
+
   if (player)
   {
     return &canvas[WELLSIZE + x + canvasLutY[y]];
@@ -299,11 +311,11 @@ void refreshScreen(byte player)
       currentPuyo = puyoIDAtPosition(player, x, y);
       tileadr = &tiles[currentPuyo * 4];
       // tile
-      *(screenadr++) = *(tileadr++) | 128;
-      *(screenadr++) = *(tileadr++) | 128;
+      *(screenadr++) = *(tileadr++);
+      *(screenadr++) = *(tileadr++);
       screenadr += 38;
-      *(screenadr++) = *(tileadr++) | 128;
-      *screenadr = *(tileadr) | 128;
+      *(screenadr++) = *(tileadr++);
+      *screenadr = *(tileadr);
       // colour
       *(coladr++) = colours[currentPuyo];
       *(coladr++) = colours[currentPuyo];
@@ -323,6 +335,17 @@ void doPlayerTick(byte player)
   byte i, a;
   word offset = 0;
 
+#ifdef DEBUG
+  byte ct;
+  ct = ticks - playerStartTick[player];
+  if (ct > maxTicks)
+  {
+    maxTicks = ct;
+    gotoxy(0, 0);
+    printf("mt: %u   ", maxTicks);
+  }
+#endif
+
   if (ticks - playerStartTick[player] < baseTickDelay)
   {
     return;
@@ -334,7 +357,7 @@ void doPlayerTick(byte player)
   }
 
   playerStartTick[player] = ticks; //;currentTick;
-  cputc('0'+currentPlayerState[player]);
+  // cputc('0'+currentPlayerState[player]);
 
   switch (currentPlayerState[player])
   {
@@ -361,14 +384,14 @@ void doPlayerTick(byte player)
 
   case KP_STATE_FIND_AND_DELETE_COMBOS1:
   {
-    hasDeleted[player] = markForDeletion(player,0);
+    hasDeleted[player] = markForDeletion(player, 0);
     currentPlayerState[player] = KP_STATE_FIND_AND_DELETE_COMBOS2;
     break;
   }
 
   case KP_STATE_FIND_AND_DELETE_COMBOS2:
   {
-    hasDeleted[player] |= markForDeletion(player,1);
+    hasDeleted[player] |= markForDeletion(player, 1);
     if (hasDeleted[player])
     {
       currentPlayerState[player] = KP_STATE_FALL_AFTER_DELETE;
@@ -444,13 +467,21 @@ void setVIC3Mode()
   *vicmode |= 64;
 }
 
+void loadCharset()
+{
+  byte characterPointer;
+  memcpy(0x3000, charset, 2048);
+  characterPointer = (VICII->MEMORY & 240) + 12;
+  VICII->MEMORY = characterPointer;
+  VICII->CONTROL2 |= 16;
+}
+
 void main()
 {
-
+  loadCharset();
   asm { sei}
   *KERNEL_IRQ = &irqService;
   asm { cli}
-
   clrscr();
   setupLUT();
   bgcolor(0);
