@@ -30,6 +30,7 @@ typedef unsigned int word;
 
 #define KP_BIT_CHECKED 128
 #define KP_BIT_DELETE 64
+#define KP_BIT_IS_PLAYER_TILE 32
 
 #define KP_STATE_BEGIN_FALL 0
 #define KP_STATE_FALL_DOWN 1
@@ -39,9 +40,10 @@ typedef unsigned int word;
 
 volatile byte ticks;
 
-const byte tiles[] = {32, 32, 32, 32, 64, 65, 66, 67, 64, 65, 66, 67, 64, 65, 66, 67, 64, 65, 66, 67 };
-const byte colours[] = {BLACK,0xa,0xb,0xc,0xd};
+const byte tiles[] = {32, 32, 32, 32, 64, 65, 66, 67, 64, 65, 66, 67, 64, 65, 66, 67, 64, 65, 66, 67};
+const byte colours[] = {BLACK, 8 + RED, 8 + BLUE, 8 + PURPLE, 8 + CYAN};
 
+byte playerTileList[8]; // table holding coordinates of currently falling tiles
 byte *deleteList[2 * DELETELIST_SIZE];
 byte canvas[2 * WELLSIZE];
 
@@ -56,19 +58,6 @@ word screenLutY[25];       // screen row LUT
 #ifdef DEBUG
 byte maxTicks;
 #endif
-
-/*
-
-max ticks per scheduler step:
-
-                            c64@1mhz        c65@3.5mhz
------------------------------------------------------------------------------------                            
-  inlined accessor          32              10
-  non-inlined accessor      39              11
-  non-inlined ?: accessor   39              11
-
-
-*/
 
 inline byte *puyoAtPosition(byte player, byte x, byte y)
 {
@@ -270,7 +259,7 @@ byte markForDeletion(byte player, byte part)
 bool fallDownStep(byte player)
 {
   bool moved = false;
-  byte *elem, *prevElem;
+  byte *elem, *prevElem, *nextElem;
   byte x, y;
 
   for (y = NUM_ROWS - 1; y != 0; y--)
@@ -286,6 +275,18 @@ bool fallDownStep(byte player)
         *elem = *prevElem;
         *prevElem = 0;
       }
+
+      // stop player tiles if they have landed
+      if (*elem & KP_BIT_IS_PLAYER_TILE) {
+        if (y==NUM_ROWS-1) {
+          *elem = *elem & 7; // remove player tile bit
+        } else {
+          if (puyoIDAtPosition(player,x,y+1)) {
+            *elem = *elem & 7;
+          }
+        }
+      }
+
     }
   }
   return moved;
@@ -296,9 +297,22 @@ void refreshScreen(byte player)
   byte *screenadr;
   byte *coladr;
   byte *tileadr;
-  byte currentPuyo;
+  byte *currentPuyo;
+  byte currentPuyoID;
+  byte tileListOffset;
   word offset;
   byte x, y;
+
+  tileListOffset=0;
+  if (player == 1)
+  {
+    tileListOffset = 4;
+  }
+
+  playerTileList[tileListOffset] = 0;
+  playerTileList[tileListOffset + 1] = 0;
+  playerTileList[tileListOffset + 2] = 0;
+  playerTileList[tileListOffset + 3] = 0;
 
   // refreshing from bottom up to avoid flickering
   for (y = NUM_ROWS - 1; y != 0; y--)
@@ -308,8 +322,17 @@ void refreshScreen(byte player)
       offset = 6 + ((player == 0) ? (x * 2 + (screenLutY[y])) : x * 2 + screenLutY[y] + (NUM_COLUMNS * 2) + 4);
       screenadr = (DEFAULT_SCREEN + offset);
       coladr = (COLORRAM + offset);
-      currentPuyo = puyoIDAtPosition(player, x, y);
-      tileadr = &tiles[currentPuyo * 4];
+      currentPuyo = puyoAtPosition(player, x, y);
+      currentPuyoID = *currentPuyo & 7;
+      tileadr = &tiles[currentPuyoID * 4];
+
+      // test for player tile
+      if (*currentPuyo & KP_BIT_IS_PLAYER_TILE)
+      {
+        playerTileList[tileListOffset++] = x;
+        playerTileList[tileListOffset++] = y;
+      }
+
       // tile
       *(screenadr++) = *(tileadr++);
       *(screenadr++) = *(tileadr++);
@@ -317,13 +340,37 @@ void refreshScreen(byte player)
       *(screenadr++) = *(tileadr++);
       *screenadr = *(tileadr);
       // colour
-      *(coladr++) = colours[currentPuyo];
-      *(coladr++) = colours[currentPuyo];
+      *(coladr++) = colours[currentPuyoID];
+      *(coladr++) = colours[currentPuyoID];
       coladr += 38;
-      *(coladr++) = colours[currentPuyo];
-      *(coladr) = colours[currentPuyo];
+      *(coladr++) = colours[currentPuyoID];
+      *(coladr) = colours[currentPuyoID];
     }
   }
+
+#ifdef DEBUG
+  gotoxy(0, 1);
+  printf("%u,%u / %u,%u    \n", playerTileList[0], playerTileList[1], playerTileList[2], playerTileList[3]);
+  printf("%u,%u / %u,%u    ", playerTileList[4], playerTileList[5], playerTileList[6], playerTileList[7]);
+#endif
+
+}
+
+inline void addNewPlayerTile(byte player, word offset)
+{
+  byte startColumn;
+  byte tile1, tile2;
+
+  tile2 = 1 + (rand() & 3);
+  tile1 = 1 + (rand() & 3);
+
+  do
+  {
+    startColumn = rand() & 7;
+  } while (startColumn > NUM_COLUMNS - 2);
+
+  canvas[offset + (word)startColumn] = tile1 | KP_BIT_IS_PLAYER_TILE;
+  canvas[offset + (word)startColumn + 1] = tile2 | KP_BIT_IS_PLAYER_TILE;
 }
 
 // main game logic implemented as state machine
@@ -357,18 +404,18 @@ void doPlayerTick(byte player)
   }
 
   playerStartTick[player] = ticks; //;currentTick;
-  // cputc('0'+currentPlayerState[player]);
+
+#ifdef DEBUG
+  gotoxy(35, 0);
+  cputc('0' + currentPlayerState[player]);
+#endif
 
   switch (currentPlayerState[player])
   {
 
   case KP_STATE_BEGIN_FALL:
   {
-    for (i = 0; i < NUM_COLUMNS; i++)
-    {
-      a = rand() & 3;
-      canvas[offset + i] = a;
-    }
+    addNewPlayerTile(player, offset);
     currentPlayerState[player] = KP_STATE_FALL_DOWN;
     break;
   }
@@ -445,7 +492,7 @@ interrupt(kernel_keyboard) void irqService(void)
   ticks++;
 }
 
-void setupLUT()
+void setupLUTs()
 {
   byte a;
   for (a = 0; a < NUM_ROWS; a++)
@@ -474,6 +521,8 @@ void loadCharset()
   characterPointer = (VICII->MEMORY & 240) + 12;
   VICII->MEMORY = characterPointer;
   VICII->CONTROL2 |= 16;
+  VICII->BG_COLOR1 = GREEN;
+  VICII->BG_COLOR2 = WHITE;
 }
 
 void main()
@@ -483,9 +532,10 @@ void main()
   *KERNEL_IRQ = &irqService;
   asm { cli}
   clrscr();
-  setupLUT();
+  setupLUTs();
   bgcolor(0);
   bordercolor(0);
+  textcolor(GREEN);
   setVIC3Mode();
   // keyboard_init();
   test();
