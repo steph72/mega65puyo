@@ -277,16 +277,20 @@ bool fallDownStep(byte player)
       }
 
       // stop player tiles if they have landed
-      if (*elem & KP_BIT_IS_PLAYER_TILE) {
-        if (y==NUM_ROWS-1) {
+      if (*elem & KP_BIT_IS_PLAYER_TILE)
+      {
+        if (y == NUM_ROWS - 1)
+        {
           *elem = *elem & 7; // remove player tile bit
-        } else {
-          if (puyoIDAtPosition(player,x,y+1)) {
+        }
+        else
+        {
+          if (puyoIDAtPosition(player, x, y + 1))
+          {
             *elem = *elem & 7;
           }
         }
       }
-
     }
   }
   return moved;
@@ -303,7 +307,7 @@ void refreshScreen(byte player)
   word offset;
   byte x, y;
 
-  tileListOffset=0;
+  tileListOffset = 0;
   if (player == 1)
   {
     tileListOffset = 4;
@@ -347,13 +351,13 @@ void refreshScreen(byte player)
       *(coladr) = colours[currentPuyoID];
     }
   }
-
+/*
 #ifdef DEBUG
   gotoxy(0, 1);
   printf("%u,%u / %u,%u    \n", playerTileList[0], playerTileList[1], playerTileList[2], playerTileList[3]);
   printf("%u,%u / %u,%u    ", playerTileList[4], playerTileList[5], playerTileList[6], playerTileList[7]);
 #endif
-
+*/
 }
 
 inline void addNewPlayerTile(byte player, word offset)
@@ -361,8 +365,15 @@ inline void addNewPlayerTile(byte player, word offset)
   byte startColumn;
   byte tile1, tile2;
 
-  tile2 = 1 + (rand() & 3);
-  tile1 = 1 + (rand() & 3);
+  do
+  {
+    tile2 = 1 + (rand() & 3);
+  } while (tile2 > 3);
+
+  do
+  {
+    tile1 = 1 + (rand() & 3);
+  } while (tile1 > 3);
 
   do
   {
