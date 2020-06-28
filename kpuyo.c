@@ -38,6 +38,8 @@ typedef unsigned int word;
 #define KP_STATE_FIND_AND_DELETE_COMBOS2 3
 #define KP_STATE_FALL_AFTER_DELETE 4
 
+#define KP_POSITION_INVALID 255
+
 volatile byte ticks;
 
 const byte tiles[] = {32, 32, 32, 32, 64, 65, 66, 67, 64, 65, 66, 67, 64, 65, 66, 67, 64, 65, 66, 67};
@@ -50,7 +52,7 @@ byte canvas[2 * WELLSIZE];
 byte playerStartTick[2];
 byte currentPlayerState[2];
 byte hasDeleted[2]; // delete flags for state machine
-byte baseTickDelay = 8;
+byte baseTickDelay = 16;
 
 byte canvasLutY[NUM_ROWS]; // lookup table for rows
 word screenLutY[25];       // screen row LUT
@@ -313,10 +315,10 @@ void refreshScreen(byte player)
     tileListOffset = 4;
   }
 
-  playerTileList[tileListOffset] = 0;
-  playerTileList[tileListOffset + 1] = 0;
-  playerTileList[tileListOffset + 2] = 0;
-  playerTileList[tileListOffset + 3] = 0;
+  playerTileList[tileListOffset] = KP_POSITION_INVALID;
+  playerTileList[tileListOffset + 1] = KP_POSITION_INVALID;
+  playerTileList[tileListOffset + 2] = KP_POSITION_INVALID;
+  playerTileList[tileListOffset + 3] = KP_POSITION_INVALID;
 
   // refreshing from bottom up to avoid flickering
   for (y = NUM_ROWS - 1; y != 0; y--)
@@ -351,13 +353,32 @@ void refreshScreen(byte player)
       *(coladr) = colours[currentPuyoID];
     }
   }
-/*
+  /*
 #ifdef DEBUG
   gotoxy(0, 1);
   printf("%u,%u / %u,%u    \n", playerTileList[0], playerTileList[1], playerTileList[2], playerTileList[3]);
   printf("%u,%u / %u,%u    ", playerTileList[4], playerTileList[5], playerTileList[6], playerTileList[7]);
 #endif
 */
+}
+
+void drawWell()
+{
+  byte x, y;
+  const byte pl2Offset = (NUM_COLUMNS * 2) + 4;
+
+  for (x = 0; x < NUM_COLUMNS * 2; ++x)
+  {
+    DEFAULT_SCREEN[6 + x + (24 * 40)] = 32 + 128;
+    DEFAULT_SCREEN[6 + x + (24 * 40) + pl2Offset] = 32 + 128;
+  }
+  for (y = 2; y < 25; y++)
+  {
+    DEFAULT_SCREEN[5 + ((word)y * 40)] = 32 + 128;
+    DEFAULT_SCREEN[6 + (NUM_COLUMNS * 2) + ((word)y * 40)] = 32 + 128;
+    DEFAULT_SCREEN[5 + ((word)y * 40) + pl2Offset] = 32 + 128;
+    DEFAULT_SCREEN[6 + (NUM_COLUMNS * 2) + ((word)y * 40) + pl2Offset] = 32 + 128;
+  }
 }
 
 inline void addNewPlayerTile(byte player, word offset)
@@ -384,6 +405,150 @@ inline void addNewPlayerTile(byte player, word offset)
   canvas[offset + (word)startColumn + 1] = tile2 | KP_BIT_IS_PLAYER_TILE;
 }
 
+#define KP_CMD_NONE 0
+#define KP_CMD_LEFT 1
+#define KP_CMD_RIGHT 2
+#define KP_CMD_TURN 3
+#define KP_CMD_DROP 4
+
+bool movePlayerPuyoRight(byte player, byte x, byte y)
+{
+  byte newX, newY;
+  byte *srcPuyo, *destPuyo;
+
+  if (x == KP_POSITION_INVALID)
+  {
+    return false;
+  }
+
+  if (x < NUM_COLUMNS - 1)
+  {
+    newX = x + 1;
+    newY = y;
+    srcPuyo = puyoAtPosition(player, x, y);
+    destPuyo = puyoAtPosition(player, newX, newY);
+    if (*destPuyo == 0)
+    {
+      *destPuyo = *srcPuyo;
+      *srcPuyo = 0;
+      return true;
+    }
+  }
+  return false;
+}
+
+bool movePlayerPuyoLeft(byte player, byte x, byte y)
+{
+  byte newX, newY;
+  byte *srcPuyo, *destPuyo;
+
+  cputs("left");
+
+  if (x == KP_POSITION_INVALID)
+  {
+    return false;
+  }
+
+  if (x > 0)
+  {
+    newX = x - 1;
+    newY = y;
+    srcPuyo = puyoAtPosition(player, x, y);
+    destPuyo = puyoAtPosition(player, newX, newY);
+    if (*destPuyo == 0)
+    {
+      *destPuyo = *srcPuyo;
+      *srcPuyo = 0;
+      return true;
+    }
+  }
+  return false;
+}
+
+void scanKeyboardForPlayer(byte player)
+{
+
+  byte tileListOffset;
+  byte x, y;
+
+  tileListOffset = 0;
+  if (player == 1)
+  {
+    tileListOffset = 4;
+  }
+
+  byte direction;
+
+  keyboard_event_scan();
+
+  if (player == 0)
+  {
+    if (keyboard_key_pressed(KEY_J))
+    {
+      direction = KP_CMD_LEFT;
+    }
+    else if (keyboard_key_pressed(KEY_L))
+    {
+      direction = KP_CMD_RIGHT;
+    }
+    else if (keyboard_key_pressed(KEY_I))
+    {
+      direction = KP_CMD_TURN;
+    }
+    else if (keyboard_key_pressed(KEY_K))
+    {
+      direction = KP_CMD_DROP;
+    }
+  }
+  else
+  {
+    // todo player 1
+  }
+
+  if (!direction)
+  {
+    return;
+  }
+
+  if (direction == KP_CMD_RIGHT)
+  {
+    // second tile...
+    x = playerTileList[tileListOffset + 2]; // get pos of second tile
+    y = playerTileList[tileListOffset + 3];
+    if (movePlayerPuyoRight(player, x, y))
+    {
+      playerTileList[tileListOffset + 2] = x + 1;
+    }
+
+    // first tile
+    x = playerTileList[tileListOffset]; // get pos of first tile
+    y = playerTileList[tileListOffset + 1];
+    if (movePlayerPuyoRight(player, x, y))
+    {
+      playerTileList[tileListOffset] = x + 1;
+    }
+  }
+
+  if (direction == KP_CMD_LEFT)
+  {
+    // first tile...
+    x = playerTileList[tileListOffset]; // get pos of first tile
+    y = playerTileList[tileListOffset + 1];
+    if (movePlayerPuyoLeft(player, x, y))
+    {
+      playerTileList[tileListOffset] = x - 1;
+    }
+
+    // second tile
+    x = playerTileList[tileListOffset + 2 ]; // get pos of second tile
+    y = playerTileList[tileListOffset + 3];
+    if (movePlayerPuyoLeft(player, x, y))
+    {
+      playerTileList[tileListOffset+2] = x - 1;
+    }
+  }
+}
+
 // main game logic implemented as state machine
 // (see kp_state defines for possible states)
 
@@ -408,6 +573,8 @@ void doPlayerTick(byte player)
   {
     return;
   }
+
+  scanKeyboardForPlayer(player);
 
   if (player == 1)
   {
@@ -482,6 +649,7 @@ void test()
 
   currentPlayerState[0] = KP_STATE_BEGIN_FALL;
   currentPlayerState[1] = KP_STATE_BEGIN_FALL;
+  drawWell();
 
   while (true)
   {
@@ -538,6 +706,7 @@ void loadCharset()
 
 void main()
 {
+  textcolor(BLUE);
   loadCharset();
   asm { sei}
   *KERNEL_IRQ = &irqService;
@@ -545,9 +714,9 @@ void main()
   clrscr();
   setupLUTs();
   bgcolor(0);
-  bordercolor(0);
+  bordercolor(BLACK);
   textcolor(GREEN);
   setVIC3Mode();
-  // keyboard_init();
+  keyboard_init();
   test();
 }
