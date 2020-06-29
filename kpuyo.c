@@ -16,6 +16,8 @@ typedef unsigned int word;
 #define false 0
 #endif
 
+#define BASE_DELAY 20
+
 #define SCREEN_WIDTH 40
 #define DELETELIST_SIZE 64
 #define SCREEN_MID 20
@@ -52,7 +54,10 @@ byte canvas[2 * WELLSIZE];
 byte playerStartTick[2];
 byte currentPlayerState[2];
 byte hasDeleted[2]; // delete flags for state machine
-byte baseTickDelay = 16;
+byte baseTickDelay = BASE_DELAY;
+
+volatile byte currentCommand[2];
+byte lastKeyPressed;
 
 byte canvasLutY[NUM_ROWS]; // lookup table for rows
 word screenLutY[25];       // screen row LUT
@@ -281,15 +286,21 @@ bool fallDownStep(byte player)
       // stop player tiles if they have landed
       if (*elem & KP_BIT_IS_PLAYER_TILE)
       {
+        // landing on bottom
         if (y == NUM_ROWS - 1)
         {
           *elem = *elem & 7; // remove player tile bit
         }
         else
         {
-          if (puyoIDAtPosition(player, x, y + 1))
+          // landing on non-player-tile
+          nextElem = puyoAtPosition(player, x, y + 1);
+          if (*nextElem)
           {
-            *elem = *elem & 7;
+            if (!(*nextElem & KP_BIT_IS_PLAYER_TILE))
+            {
+              *elem = *elem & 7;
+            }
           }
         }
       }
@@ -320,8 +331,7 @@ void refreshScreen(byte player)
   playerTileList[tileListOffset + 2] = KP_POSITION_INVALID;
   playerTileList[tileListOffset + 3] = KP_POSITION_INVALID;
 
-  // refreshing from bottom up to avoid flickering
-  for (y = NUM_ROWS - 1; y != 0; y--)
+  for (y = 0; y < NUM_ROWS; y++)
   {
     for (x = 0; x < NUM_COLUMNS; x++)
     {
@@ -353,7 +363,9 @@ void refreshScreen(byte player)
       *(coladr) = colours[currentPuyoID];
     }
   }
+
   /*
+
 #ifdef DEBUG
   gotoxy(0, 1);
   printf("%u,%u / %u,%u    \n", playerTileList[0], playerTileList[1], playerTileList[2], playerTileList[3]);
@@ -442,8 +454,6 @@ bool movePlayerPuyoLeft(byte player, byte x, byte y)
   byte newX, newY;
   byte *srcPuyo, *destPuyo;
 
-  cputs("left");
-
   if (x == KP_POSITION_INVALID)
   {
     return false;
@@ -465,11 +475,77 @@ bool movePlayerPuyoLeft(byte player, byte x, byte y)
   return false;
 }
 
-void scanKeyboardForPlayer(byte player)
+void rotateTile(byte player, byte tileListOffset)
+{
+  byte xOld0, yOld0, xOld1, yOld1;
+  byte xNew0, yNew0, xNew1, yNew1;
+  byte *srcPuyo;
+  byte *destPyuo;
+  byte temp1, temp2;
+
+  bordercolor(RED);
+
+  xOld0 = playerTileList[tileListOffset];
+  yOld0 = playerTileList[tileListOffset + 1];
+  xOld1 = playerTileList[tileListOffset + 2];
+  yOld1 = playerTileList[tileListOffset + 3];
+
+  // horizontal tile
+  if (xOld1 == (xOld0 + 1))
+  {
+    xNew0 = xOld0;
+    yNew0 = yOld0;
+    xNew1 = xOld0;
+    yNew1 = yOld0 + 1;
+    if (yNew1 < NUM_ROWS - 1)
+    {
+      srcPuyo = puyoAtPosition(player, xOld1, yOld1);
+      destPyuo = puyoAtPosition(player, xNew1, yNew1);
+      if (*destPyuo == 0)
+      {
+        *destPyuo = *srcPuyo;
+        *srcPuyo = 0;
+      }
+    }
+  }
+  // vertical tile
+  /*
+
+        ab -->  a  -->  ba
+                b
+
+  */
+  else if (yOld1 == (yOld0 + 1))
+  {
+    xNew0 = xOld0 + 1;
+    yNew0 = yOld0;
+    xNew1 = xOld0;
+    yNew1 = yOld0;
+    if (xNew0 < NUM_COLUMNS)
+    {
+      temp1 = *puyoAtPosition(player, xOld0, yOld0);
+      temp2 = *puyoAtPosition(player, xOld1, yOld1);
+      *puyoAtPosition(player, xOld1, yOld1) = 0;
+      *puyoAtPosition(player, xNew0, yNew0) = temp1;
+      *puyoAtPosition(player, xNew1, yNew1) = temp2;
+    }
+  }
+}
+
+bool handleCommandForPlayer(byte player)
 {
 
   byte tileListOffset;
   byte x, y;
+
+  if (!currentCommand[player])
+  {
+    return false;
+  }
+
+  // would have solved this with ?: notation, but
+  // kickc crashes with 'dk.camelot64.kickc.model.InternalError: Error! Number integer type not
+  // resolved to fixed size integer type'
 
   tileListOffset = 0;
   if (player == 1)
@@ -477,76 +553,41 @@ void scanKeyboardForPlayer(byte player)
     tileListOffset = 4;
   }
 
-  byte direction;
-
-  keyboard_event_scan();
-
-  if (player == 0)
+  if (currentCommand[player] == KP_CMD_TURN)
   {
-    if (keyboard_key_pressed(KEY_J))
-    {
-      direction = KP_CMD_LEFT;
-    }
-    else if (keyboard_key_pressed(KEY_L))
-    {
-      direction = KP_CMD_RIGHT;
-    }
-    else if (keyboard_key_pressed(KEY_I))
-    {
-      direction = KP_CMD_TURN;
-    }
-    else if (keyboard_key_pressed(KEY_K))
-    {
-      direction = KP_CMD_DROP;
-    }
-  }
-  else
-  {
-    // todo player 1
+    rotateTile(player, tileListOffset);
+    return true;
   }
 
-  if (!direction)
-  {
-    return;
-  }
-
-  if (direction == KP_CMD_RIGHT)
+  if (currentCommand[player] == KP_CMD_RIGHT)
   {
     // second tile...
     x = playerTileList[tileListOffset + 2]; // get pos of second tile
     y = playerTileList[tileListOffset + 3];
-    if (movePlayerPuyoRight(player, x, y))
-    {
-      playerTileList[tileListOffset + 2] = x + 1;
-    }
+    movePlayerPuyoRight(player, x, y);
 
     // first tile
     x = playerTileList[tileListOffset]; // get pos of first tile
     y = playerTileList[tileListOffset + 1];
-    if (movePlayerPuyoRight(player, x, y))
-    {
-      playerTileList[tileListOffset] = x + 1;
-    }
+    movePlayerPuyoRight(player, x, y);
+    return true;
   }
 
-  if (direction == KP_CMD_LEFT)
+  if (currentCommand[player] == KP_CMD_LEFT)
   {
     // first tile...
     x = playerTileList[tileListOffset]; // get pos of first tile
     y = playerTileList[tileListOffset + 1];
-    if (movePlayerPuyoLeft(player, x, y))
-    {
-      playerTileList[tileListOffset] = x - 1;
-    }
+    movePlayerPuyoLeft(player, x, y);
 
     // second tile
-    x = playerTileList[tileListOffset + 2 ]; // get pos of second tile
+    x = playerTileList[tileListOffset + 2]; // get pos of second tile
     y = playerTileList[tileListOffset + 3];
-    if (movePlayerPuyoLeft(player, x, y))
-    {
-      playerTileList[tileListOffset+2] = x - 1;
-    }
+    movePlayerPuyoLeft(player, x, y);
+    return true;
   }
+
+  return false;
 }
 
 // main game logic implemented as state machine
@@ -557,6 +598,8 @@ void doPlayerTick(byte player)
 
   byte i, a;
   word offset = 0;
+
+  scanKeyboard();
 
 #ifdef DEBUG
   byte ct;
@@ -569,12 +612,19 @@ void doPlayerTick(byte player)
   }
 #endif
 
+  if (ticks & 16)
+  {
+    if (handleCommandForPlayer(player))
+    {
+      refreshScreen(player);
+      currentCommand[player] = KP_CMD_NONE;
+    }
+  }
+
   if (ticks - playerStartTick[player] < baseTickDelay)
   {
     return;
   }
-
-  scanKeyboardForPlayer(player);
 
   if (player == 1)
   {
@@ -600,6 +650,8 @@ void doPlayerTick(byte player)
 
   case KP_STATE_FALL_DOWN:
   {
+    handleCommandForPlayer(player);
+
     if (!fallDownStep(player))
     {
       currentPlayerState[player] = KP_STATE_FIND_AND_DELETE_COMBOS1;
@@ -662,6 +714,74 @@ void test()
     {
       doPlayerTick(0);
       doPlayerTick(1);
+    }
+  }
+}
+
+bool keyPressed(char aKey)
+{
+  byte isKeyPressed;
+
+  asm {sei}
+  isKeyPressed = keyboard_key_pressed(aKey);
+  asm {cli}
+
+  if (isKeyPressed)
+  {
+    if (lastKeyPressed == aKey)
+    {
+      return false;
+    }
+
+    lastKeyPressed = aKey;
+    return true;
+  }
+
+  // check if key is still being pressed
+  asm {sei}
+  isKeyPressed = keyboard_key_pressed(lastKeyPressed);
+  asm {cli}
+
+  if (!isKeyPressed)
+  {
+    lastKeyPressed = 0;
+  }
+
+  return false;
+}
+
+void scanKeyboard()
+{
+
+  if (!currentCommand[1])
+  {
+    if (keyPressed(KEY_J))
+    {
+      currentCommand[1] = KP_CMD_LEFT;
+    }
+    else if (keyPressed(KEY_L))
+    {
+      currentCommand[1] = KP_CMD_RIGHT;
+    }
+    else if (keyPressed(KEY_I))
+    {
+      currentCommand[1] = KP_CMD_TURN;
+    }
+  }
+
+  if (!currentCommand[0])
+  {
+    if (keyPressed(KEY_A))
+    {
+      currentCommand[0] = KP_CMD_LEFT;
+    }
+    else if (keyPressed(KEY_D))
+    {
+      currentCommand[0] = KP_CMD_RIGHT;
+    }
+    else if (keyPressed(KEY_W))
+    {
+      currentCommand[0] = KP_CMD_TURN;
     }
   }
 }
