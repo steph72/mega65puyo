@@ -54,13 +54,15 @@ byte canvas[2 * WELLSIZE];
 byte playerStartTick[2];
 byte currentPlayerState[2];
 byte hasDeleted[2]; // delete flags for state machine
-byte baseTickDelay = BASE_DELAY;
+byte baseTickDelay[2] = {BASE_DELAY,BASE_DELAY};
 
 volatile byte currentCommand[2];
 byte lastKeyPressed;
 
 byte canvasLutY[NUM_ROWS]; // lookup table for rows
 word screenLutY[25];       // screen row LUT
+
+byte currentPlayerKey[16];
 
 #ifdef DEBUG
 byte maxTicks;
@@ -553,6 +555,11 @@ bool handleCommandForPlayer(byte player)
     tileListOffset = 4;
   }
 
+  if (currentCommand[player] == KP_CMD_DROP) {
+    baseTickDelay[player] = 5;
+    return true;
+  }
+
   if (currentCommand[player] == KP_CMD_TURN)
   {
     rotateTile(player, tileListOffset);
@@ -599,7 +606,12 @@ void doPlayerTick(byte player)
   byte i, a;
   word offset = 0;
 
-  scanKeyboard();
+  getPlayerKeypress();
+  if (handleCommandForPlayer(player))
+  {
+    refreshScreen(player);
+    currentCommand[player] = KP_CMD_NONE;
+  }
 
 #ifdef DEBUG
   byte ct;
@@ -612,16 +624,7 @@ void doPlayerTick(byte player)
   }
 #endif
 
-  if (ticks & 16)
-  {
-    if (handleCommandForPlayer(player))
-    {
-      refreshScreen(player);
-      currentCommand[player] = KP_CMD_NONE;
-    }
-  }
-
-  if (ticks - playerStartTick[player] < baseTickDelay)
+  if (ticks - playerStartTick[player] < baseTickDelay[player])
   {
     return;
   }
@@ -643,6 +646,7 @@ void doPlayerTick(byte player)
 
   case KP_STATE_BEGIN_FALL:
   {
+    baseTickDelay[player] = BASE_DELAY;
     addNewPlayerTile(player, offset);
     currentPlayerState[player] = KP_STATE_FALL_DOWN;
     break;
@@ -718,74 +722,6 @@ void test()
   }
 }
 
-bool keyPressed(char aKey)
-{
-  byte isKeyPressed;
-
-  asm {sei}
-  isKeyPressed = keyboard_key_pressed(aKey);
-  asm {cli}
-
-  if (isKeyPressed)
-  {
-    if (lastKeyPressed == aKey)
-    {
-      return false;
-    }
-
-    lastKeyPressed = aKey;
-    return true;
-  }
-
-  // check if key is still being pressed
-  asm {sei}
-  isKeyPressed = keyboard_key_pressed(lastKeyPressed);
-  asm {cli}
-
-  if (!isKeyPressed)
-  {
-    lastKeyPressed = 0;
-  }
-
-  return false;
-}
-
-void scanKeyboard()
-{
-
-  if (!currentCommand[1])
-  {
-    if (keyPressed(KEY_J))
-    {
-      currentCommand[1] = KP_CMD_LEFT;
-    }
-    else if (keyPressed(KEY_L))
-    {
-      currentCommand[1] = KP_CMD_RIGHT;
-    }
-    else if (keyPressed(KEY_I))
-    {
-      currentCommand[1] = KP_CMD_TURN;
-    }
-  }
-
-  if (!currentCommand[0])
-  {
-    if (keyPressed(KEY_A))
-    {
-      currentCommand[0] = KP_CMD_LEFT;
-    }
-    else if (keyPressed(KEY_D))
-    {
-      currentCommand[0] = KP_CMD_RIGHT;
-    }
-    else if (keyPressed(KEY_W))
-    {
-      currentCommand[0] = KP_CMD_TURN;
-    }
-  }
-}
-
 interrupt(kernel_keyboard) void irqService(void)
 {
   ticks++;
@@ -824,8 +760,93 @@ void loadCharset()
   VICII->BG_COLOR2 = WHITE;
 }
 
+void changePlayerCommandState(byte player, byte state, byte event)
+{
+  byte offset = 0;
+
+  if (player == 1)
+  {
+    offset = 8;
+  }
+
+  //key released?
+  if (event & 0x40)
+  {
+    // printf("-%u ", state);
+    currentPlayerKey[offset + state] = 0;
+  }
+  else
+  // key pressed
+  {
+    if (currentPlayerKey[offset + state] == 0)
+    {
+      currentCommand[player] = state;
+      // printf("+%u ", state);
+    }
+    currentPlayerKey[offset + state] = 1;
+  }
+}
+
+void getPlayerKeypress(void)
+{
+  byte event;
+  byte keycode;
+
+  asm { sei}
+  keyboard_event_scan();
+  event = keyboard_event_get();
+  asm { cli }
+
+  if (event == 0xff)
+  {
+    return;
+  }
+
+  keycode = event & 0x3f;
+
+  switch (keycode)
+  {
+  case KEY_I:
+    changePlayerCommandState(1, KP_CMD_TURN, event);
+    break;
+
+  case KEY_J:
+    changePlayerCommandState(1, KP_CMD_LEFT, event);
+    break;
+
+  case KEY_K:
+    changePlayerCommandState(1, KP_CMD_DROP, event);
+    break;
+
+  case KEY_L:
+    changePlayerCommandState(1, KP_CMD_RIGHT, event);
+    break;
+
+  case KEY_W:
+    changePlayerCommandState(0, KP_CMD_TURN, event);
+    break;
+
+  case KEY_A:
+    changePlayerCommandState(0, KP_CMD_LEFT, event);
+    break;
+
+  case KEY_S:
+    changePlayerCommandState(0, KP_CMD_DROP, event);
+    break;
+
+  case KEY_D:
+    changePlayerCommandState(0, KP_CMD_RIGHT, event);
+    break;
+
+  default:
+    break;
+  }
+}
+
 void main()
 {
+  byte a;
+
   textcolor(BLUE);
   loadCharset();
   asm { sei}
@@ -839,4 +860,10 @@ void main()
   setVIC3Mode();
   keyboard_init();
   test();
+  /*
+  do
+  {
+    getPlayerKeypress();
+  } while (1);
+  */
 }
