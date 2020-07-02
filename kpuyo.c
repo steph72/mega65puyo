@@ -19,7 +19,6 @@ typedef unsigned int word;
 #define BASE_DELAY 20
 
 #define SCREEN_WIDTH 40
-#define DELETELIST_SIZE 64
 #define SCREEN_MID 20
 #define WELL_H_PADDING 3
 
@@ -30,9 +29,10 @@ typedef unsigned int word;
 
 #define WELLSIZE NUM_ROWS *NUM_COLUMNS
 
-#define KP_BIT_CHECKED 128
+#define KP_BIT_MARKED 128
 #define KP_BIT_DELETE 64
 #define KP_BIT_IS_PLAYER_TILE 32
+#define KP_BIT_IS_NUISANCE 8
 
 #define KP_STATE_BEGIN_FALL 0
 #define KP_STATE_FALL_DOWN 1
@@ -44,17 +44,27 @@ typedef unsigned int word;
 
 volatile byte ticks;
 
-const byte tiles[] = {32, 32, 32, 32, 64, 65, 66, 67, 64, 65, 66, 67, 64, 65, 66, 67, 64, 65, 66, 67};
-const byte colours[] = {BLACK, 8 + RED, 8 + BLUE, 8 + PURPLE, 8 + CYAN};
+const byte tiles[] = {
+    32, 32, 32, 32,  // tile 0
+    64, 65, 66, 67,  // tile 1
+    64, 65, 66, 67,  // tile 2
+    64, 65, 66, 67,  // tile 3
+    64, 65, 66, 67,  // tile 4
+    0, 0, 0, 0,      // tile 5
+    0, 0, 0, 0,      // tile 6
+    0, 0, 0, 0,      // tile 7
+    68, 69, 70, 71}; // tile 8 (junk tile)
+
+const byte colours[] = {BLACK, 8 + RED, 8 + BLUE, 8 + PURPLE, 8 + CYAN, 0, 0, 0, 8 + WHITE};
 
 byte playerTileList[8]; // table holding coordinates of currently falling tiles
-byte *deleteList[2 * DELETELIST_SIZE];
 byte canvas[2 * WELLSIZE];
 
 byte playerStartTick[2];
 byte currentPlayerState[2];
-byte hasDeleted[2]; // delete flags for state machine
-byte baseTickDelay[2] = {BASE_DELAY,BASE_DELAY};
+byte hasDeleted[2];               // delete flags for state machine
+byte numOfCurrentDeletedTiles[2]; // for keeping score
+byte baseTickDelay[2] = {BASE_DELAY, BASE_DELAY};
 
 volatile byte currentCommand[2];
 byte lastKeyPressed;
@@ -63,6 +73,9 @@ byte canvasLutY[NUM_ROWS]; // lookup table for rows
 word screenLutY[25];       // screen row LUT
 
 byte currentPlayerKey[16];
+byte nextTiles[16];
+
+word playerTileCount[2];
 
 #ifdef DEBUG
 byte maxTicks;
@@ -110,8 +123,6 @@ inline byte puyoIDAtPosition(byte player, byte x, byte y)
   of puyos in a slightly more convoluted way than I had hoped...
 */
 
-const byte deleteListOffsetTbl[] = {255, DELETELIST_SIZE - 1};
-
 inline byte checkNeighbors(byte player, byte px, byte py)
 {
   byte found;
@@ -119,22 +130,18 @@ inline byte checkNeighbors(byte player, byte px, byte py)
   byte thisPuyoID;
   byte markedPuyoID;
   byte numHits = 1;
-  byte deleteListOffset;
 
   byte *currentPuyo;
 
   thisPuyoID = *puyoAtPosition(player, px, py);
 
   // no puyo or already marked? don't check
-  if (!thisPuyoID || thisPuyoID & 128)
+  if (!thisPuyoID || thisPuyoID & KP_BIT_MARKED || thisPuyoID & KP_BIT_IS_NUISANCE)
   {
     return 0;
   }
 
-  deleteListOffset = deleteListOffsetTbl[player];
-
-  deleteList[deleteListOffset + numHits] = puyoAtPosition(player, px, py);
-  markedPuyoID = thisPuyoID | 128;
+  markedPuyoID = thisPuyoID | KP_BIT_MARKED;
 
   // mark this puyo
   *puyoAtPosition(player, px, py) = markedPuyoID;
@@ -159,37 +166,33 @@ inline byte checkNeighbors(byte player, byte px, byte py)
           if (
               ((x < NUM_COLUMNS - 1) && (*puyoAtPosition(player, x + 1, y) == markedPuyoID)))
           {
-            *currentPuyo |= 128;
+            *currentPuyo |= KP_BIT_MARKED;
             numHits++;
             found = 1;
-            deleteList[deleteListOffset + numHits] = currentPuyo;
           }
 
           if (
               ((x > 0) && (*puyoAtPosition(player, x - 1, y) == markedPuyoID)))
           {
-            *currentPuyo |= 128;
+            *currentPuyo |= KP_BIT_MARKED;
             numHits++;
             found = 1;
-            deleteList[deleteListOffset + numHits] = currentPuyo;
           }
 
           if (
               ((y > 0) && (*puyoAtPosition(player, x, y - 1) == markedPuyoID)))
           {
-            *currentPuyo |= 128;
+            *currentPuyo |= KP_BIT_MARKED;
             numHits++;
             found = 1;
-            deleteList[deleteListOffset + numHits] = currentPuyo;
           }
 
           if (
               ((y < NUM_ROWS - 1) && (*puyoAtPosition(player, x, y + 1) == markedPuyoID)))
           {
-            *currentPuyo |= 128;
+            *currentPuyo |= KP_BIT_MARKED;
             numHits++;
             found = 1;
-            deleteList[deleteListOffset + numHits] = currentPuyo;
           }
         }
       }
@@ -200,11 +203,17 @@ inline byte checkNeighbors(byte player, byte px, byte py)
 
 void deleteMarkedPuyos(byte player, byte num)
 {
-  byte i;
-  for (i = 0; i < num; i++)
-  {
-    *deleteList[(player * DELETELIST_SIZE) + i] = 0;
+  byte x,y;
+  byte *puyo;
+  for (x=0;x<NUM_COLUMNS;x++) {
+    for (y=0;y<NUM_ROWS;y++) {
+      if (*puyoAtPosition(player,x,y) & KP_BIT_MARKED) {
+        *puyoAtPosition(player,x,y) = 0;
+      }
+    }
   }
+  return;
+
 }
 
 void clearMarked(byte player)
@@ -258,7 +267,7 @@ byte markForDeletion(byte player, byte part)
       if (count > 3)
       {
         deleteMarkedPuyos(player, count);
-        hasDeleted = 1;
+        hasDeleted = count;
       }
     }
   }
@@ -341,7 +350,9 @@ void refreshScreen(byte player)
       screenadr = (DEFAULT_SCREEN + offset);
       coladr = (COLORRAM + offset);
       currentPuyo = puyoAtPosition(player, x, y);
-      currentPuyoID = *currentPuyo & 7;
+      // we AND the current puyo with 15 here, because we
+      // explicitly want to draw the "8" (junk tiles) if needed
+      currentPuyoID = *currentPuyo & 15;
       tileadr = &tiles[currentPuyoID * 4];
 
       // test for player tile
@@ -365,15 +376,6 @@ void refreshScreen(byte player)
       *(coladr) = colours[currentPuyoID];
     }
   }
-
-  /*
-
-#ifdef DEBUG
-  gotoxy(0, 1);
-  printf("%u,%u / %u,%u    \n", playerTileList[0], playerTileList[1], playerTileList[2], playerTileList[3]);
-  printf("%u,%u / %u,%u    ", playerTileList[4], playerTileList[5], playerTileList[6], playerTileList[7]);
-#endif
-*/
 }
 
 void drawWell()
@@ -383,15 +385,26 @@ void drawWell()
 
   for (x = 0; x < NUM_COLUMNS * 2; ++x)
   {
-    DEFAULT_SCREEN[6 + x + (24 * 40)] = 32 + 128;
-    DEFAULT_SCREEN[6 + x + (24 * 40) + pl2Offset] = 32 + 128;
+    DEFAULT_SCREEN[6 + x + (24 * 40)] = 160;
+    DEFAULT_SCREEN[6 + x + (24 * 40) + pl2Offset] = 160;
   }
   for (y = 2; y < 25; y++)
   {
-    DEFAULT_SCREEN[5 + ((word)y * 40)] = 32 + 128;
-    DEFAULT_SCREEN[6 + (NUM_COLUMNS * 2) + ((word)y * 40)] = 32 + 128;
-    DEFAULT_SCREEN[5 + ((word)y * 40) + pl2Offset] = 32 + 128;
-    DEFAULT_SCREEN[6 + (NUM_COLUMNS * 2) + ((word)y * 40) + pl2Offset] = 32 + 128;
+    DEFAULT_SCREEN[5 + ((word)y * 40)] = 160;
+    DEFAULT_SCREEN[6 + (NUM_COLUMNS * 2) + ((word)y * 40)] = 160;
+    DEFAULT_SCREEN[6 + (NUM_COLUMNS * 2) + ((word)y * 40) + pl2Offset] = 160;
+  }
+}
+
+inline void addJunk(byte player, byte lines)
+{
+  byte i;
+  for (i = 0; i < NUM_COLUMNS; i++)
+  {
+    if (rand() & 2)
+    {
+      *puyoAtPosition(player, i, 0) = 8; // add junk puyo
+    }
   }
 }
 
@@ -399,6 +412,8 @@ inline void addNewPlayerTile(byte player, word offset)
 {
   byte startColumn;
   byte tile1, tile2;
+
+  srand(playerTileCount[player]++);
 
   do
   {
@@ -555,7 +570,8 @@ bool handleCommandForPlayer(byte player)
     tileListOffset = 4;
   }
 
-  if (currentCommand[player] == KP_CMD_DROP) {
+  if (currentCommand[player] == KP_CMD_DROP)
+  {
     baseTickDelay[player] = 5;
     return true;
   }
@@ -636,7 +652,7 @@ void doPlayerTick(byte player)
 
   playerStartTick[player] = ticks; //;currentTick;
 
-#ifdef DEBUG
+#ifdef DEBUG2
   gotoxy(35, 0);
   cputc('0' + currentPlayerState[player]);
 #endif
@@ -649,6 +665,7 @@ void doPlayerTick(byte player)
     baseTickDelay[player] = BASE_DELAY;
     addNewPlayerTile(player, offset);
     currentPlayerState[player] = KP_STATE_FALL_DOWN;
+    numOfCurrentDeletedTiles[player] = 0;
     break;
   }
 
@@ -672,13 +689,27 @@ void doPlayerTick(byte player)
 
   case KP_STATE_FIND_AND_DELETE_COMBOS2:
   {
-    hasDeleted[player] |= markForDeletion(player, 1);
+    hasDeleted[player] += markForDeletion(player, 1);
+    numOfCurrentDeletedTiles[player] += hasDeleted[player];
     if (hasDeleted[player])
     {
       currentPlayerState[player] = KP_STATE_FALL_AFTER_DELETE;
     }
     else
     {
+      //gotoxy((player + 1) * 4, 24);
+      //printf("%u   ", numOfCurrentDeletedTiles[player]);
+      if (numOfCurrentDeletedTiles[player] > 3)
+      {
+        if (player)
+        {
+          addJunk(0, 1);
+        }
+        else
+        {
+          addJunk(1, 1);
+        }
+      }
       currentPlayerState[player] = KP_STATE_BEGIN_FALL;
     }
     break;
